@@ -1,99 +1,114 @@
 #!/bin/bash
 
-# Проверка минимального количества аргументов
-if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 [--max_depth N] /path/to/input_dir /path/to/output_dir"
+if [[ $# -lt 2 ]]; then
+    echo "Usage: $0 [--max_depth N] <input_dir> <output_dir>"
     exit 1
 fi
 
-# Инициализация переменных
-max_depth=-1
-input_dir=""
-output_dir=""
+MAX_DEPTH=""
+INPUT_DIR=""
+OUTPUT_DIR=""
 
-# Разбор аргументов
-if [ "$1" == "--max_depth" ]; then
-    if [ "$#" -ne 4 ]; then
-        echo "Usage: $0 [--max_depth N] /path/to/input_dir /path/to/output_dir"
-        exit 1
-    fi
-    max_depth=$2
-    input_dir=$3
-    output_dir=$4
-else
-    if [ "$#" -ne 2 ]; then
-        echo "Usage: $0 [--max_depth N] /path/to/input_dir /path/to/output_dir"
-        exit 1
-    fi
-    input_dir=$1
-    output_dir=$2
-fi
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --max_depth)
+            shift
+            MAX_DEPTH=$1
+            shift
+            ;;
+        *)
+            if [[ -z "$INPUT_DIR" ]]; then
+                INPUT_DIR="$1"
+            elif [[ -z "$OUTPUT_DIR" ]]; then
+                OUTPUT_DIR="$1"
+            else
+                echo "Unexpected argument: $1"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
 
-# Проверка существования входной директории
-if [ ! -d "$input_dir" ]; then
-    echo "Error: Input directory does not exist"
+if [[ ! -d "$INPUT_DIR" ]]; then
+    echo "Input directory does not exist: $INPUT_DIR"
     exit 1
 fi
 
-# Создание выходной директории
-mkdir -p "$output_dir"
+mkdir -p "$OUTPUT_DIR"
 
-# Функция для генерации уникального имени файла
-get_unique_filename() {
-    local dest=$1
-    local filename=$2
+copy_file_with_suffix() {
+    local src_file="$1"
+    local dest_dir="$2"
+
+    mkdir -p "$dest_dir"
+
+    local filename=$(basename "$src_file")
     local name="${filename%.*}"
     local ext="${filename##*.}"
 
-    # Обработка файлов без расширения
-    if [ "$name" == "$ext" ]; then
+    if [[ "$name" == "$ext" ]]; then
         ext=""
-        name="$filename"
     else
         ext=".$ext"
     fi
 
+    local dest_file="$dest_dir/$name$ext"
     local counter=1
-    local new_filename="${name}${ext}"
-    
-    while [ -e "$dest/$new_filename" ]; do
-        new_filename="${name}${counter}${ext}"
-        counter=$((counter + 1))
+
+    while [[ -e "$dest_file" ]]; do
+        dest_file="$dest_dir/${name}${counter}${ext}"
+        ((counter++))
     done
 
-    echo "$new_filename"
+    cp "$src_file" "$dest_file"
 }
 
-# Функция для копирования файлов с учетом глубины
-copy_with_depth() {
-    local src=$1
-    local dest=$2
-    local current_depth=$3
-    local max_d=$4
+truncate_path() {
+    local path="$1"
+    local depth="$2"
 
-    for item in "$src"/*; do
-        if [ -f "$item" ]; then
-            # Обработка файла
-            filename=$(basename "$item")
-            unique_name=$(get_unique_filename "$dest" "$filename")
-            cp "$item" "$dest/$unique_name"
-        elif [ -d "$item" ]; then
-            # Обработка директории
-            dirname=$(basename "$item")
-            if [ "$max_d" -eq -1 ] || [ "$current_depth" -lt "$max_d" ]; then
-                # Копируем с сохранением структуры
-                new_dest="$dest/$dirname"
-                mkdir -p "$new_dest"
-                copy_with_depth "$item" "$new_dest" $((current_depth + 1)) "$max_d"
-            else
-                # Копируем содержимое с уменьшением глубины
-                copy_with_depth "$item" "$dest" "$current_depth" "$max_d"
-            fi
+    IFS='/' read -ra parts <<< "$path"
+    local result=""
+
+    for ((i=0; i<depth && i<${#parts[@]}; i++)); do
+        if [[ -n "${parts[$i]}" ]]; then
+            result="$result/${parts[$i]}"
         fi
     done
+
+    echo "${result#/}"
 }
 
-# Запуск основной функции
-copy_with_depth "$input_dir" "$output_dir" 0 "$max_depth"
+find "$INPUT_DIR" -mindepth 1 | while IFS= read -r item; do
+    rel_path="${item#$INPUT_DIR/}"
+    depth=$(echo "$rel_path" | tr -cd '/' | wc -c)
+    depth=$((depth + 1))
 
-echo "Я щас помру я уже не можу"
+    if [[ -z "$MAX_DEPTH" ]]; then
+        if [[ -f "$item" ]]; then
+            copy_file_with_suffix "$item" "$OUTPUT_DIR"
+        fi
+    else
+        if [[ -d "$item" ]]; then
+            if [[ "$depth" -lt "$MAX_DEPTH" ]]; then
+                mkdir -p "$OUTPUT_DIR/$rel_path"
+            elif [[ "$depth" -eq "$MAX_DEPTH" ]]; then
+                mkdir -p "$OUTPUT_DIR/$rel_path"
+            else
+                truncated_rel_path=$(truncate_path "$rel_path" "$MAX_DEPTH")
+                mkdir -p "$OUTPUT_DIR/$truncated_rel_path"
+            fi
+        elif [[ -f "$item" ]]; then
+            if [[ "$depth" -le "$MAX_DEPTH" ]]; then
+                dest_dir="$OUTPUT_DIR/$(dirname "$rel_path")"
+            else
+                truncated_rel_path=$(truncate_path "$(dirname "$rel_path")" "$MAX_DEPTH")
+                dest_dir="$OUTPUT_DIR/$truncated_rel_path"
+            fi
+            copy_file_with_suffix "$item" "$dest_dir"
+        fi
+    fi
+done
+
+echo "Завершено"
