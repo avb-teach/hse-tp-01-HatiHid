@@ -1,114 +1,136 @@
 #!/bin/bash
 
-if [[ $# -lt 2 ]]; then
-    echo "Usage: $0 [--max_depth N] <input_dir> <output_dir>"
+if [ "$#" -lt 2 ]; then
+    echo "Usage: $0 [--max_depth N] input_dir output_dir"
     exit 1
 fi
 
-MAX_DEPTH=""
-INPUT_DIR=""
-OUTPUT_DIR=""
+if [ "$1" == "--max_depth" ]; then
+    max_depth="$2"
+    shift 2
+else
+    max_depth=""
+fi
 
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --max_depth)
-            shift
-            MAX_DEPTH=$1
-            shift
-            ;;
-        *)
-            if [[ -z "$INPUT_DIR" ]]; then
-                INPUT_DIR="$1"
-            elif [[ -z "$OUTPUT_DIR" ]]; then
-                OUTPUT_DIR="$1"
-            else
-                echo "Unexpected argument: $1"
-                exit 1
-            fi
-            shift
-            ;;
-    esac
-done
+input_dir="$1"
+output_dir="$2"
 
-if [[ ! -d "$INPUT_DIR" ]]; then
-    echo "Input directory does not exist: $INPUT_DIR"
+input_dir="${input_dir%/}"
+output_dir="${output_dir%/}"
+
+if [ ! -d "$input_dir" ]; then
+    echo "Error: input_dir '$input_dir' not found or not a directory."
     exit 1
 fi
 
-mkdir -p "$OUTPUT_DIR"
+mkdir -p "$output_dir"
 
-copy_file_with_suffix() {
-    local src_file="$1"
-    local dest_dir="$2"
+copy_with_rename() {
+    src_file="$1"
+    dest_dir="$2"
+    base_name="$(basename "$src_file")"
 
-    mkdir -p "$dest_dir"
-
-    local filename=$(basename "$src_file")
-    local name="${filename%.*}"
-    local ext="${filename##*.}"
-
-    if [[ "$name" == "$ext" ]]; then
+    if [[ "$base_name" == *.* ]]; then
+        base="${base_name%.*}"
+        ext="${base_name##*.}"
+        if [ -z "$base" ]; then
+            base="$base_name"
+            ext=""
+        fi
+    else
+        base="$base_name"
         ext=""
-    else
-        ext=".$ext"
     fi
 
-    local dest_file="$dest_dir/$name$ext"
-    local counter=1
-
-    while [[ -e "$dest_file" ]]; do
-        dest_file="$dest_dir/${name}${counter}${ext}"
-        ((counter++))
-    done
-
-    cp "$src_file" "$dest_file"
-}
-
-truncate_path() {
-    local path="$1"
-    local depth="$2"
-
-    IFS='/' read -ra parts <<< "$path"
-    local result=""
-
-    for ((i=0; i<depth && i<${#parts[@]}; i++)); do
-        if [[ -n "${parts[$i]}" ]]; then
-            result="$result/${parts[$i]}"
-        fi
-    done
-
-    echo "${result#/}"
-}
-
-find "$INPUT_DIR" -mindepth 1 | while IFS= read -r item; do
-    rel_path="${item#$INPUT_DIR/}"
-    depth=$(echo "$rel_path" | tr -cd '/' | wc -c)
-    depth=$((depth + 1))
-
-    if [[ -z "$MAX_DEPTH" ]]; then
-        if [[ -f "$item" ]]; then
-            copy_file_with_suffix "$item" "$OUTPUT_DIR"
-        fi
+    if [ -z "$ext" ]; then
+        newname="$base"
     else
-        if [[ -d "$item" ]]; then
-            if [[ "$depth" -lt "$MAX_DEPTH" ]]; then
-                mkdir -p "$OUTPUT_DIR/$rel_path"
-            elif [[ "$depth" -eq "$MAX_DEPTH" ]]; then
-                mkdir -p "$OUTPUT_DIR/$rel_path"
-            else
-                truncated_rel_path=$(truncate_path "$rel_path" "$MAX_DEPTH")
-                mkdir -p "$OUTPUT_DIR/$truncated_rel_path"
-            fi
-        elif [[ -f "$item" ]]; then
-            if [[ "$depth" -le "$MAX_DEPTH" ]]; then
-                dest_dir="$OUTPUT_DIR/$(dirname "$rel_path")"
-            else
-                truncated_rel_path=$(truncate_path "$(dirname "$rel_path")" "$MAX_DEPTH")
-                dest_dir="$OUTPUT_DIR/$truncated_rel_path"
-            fi
-            copy_file_with_suffix "$item" "$dest_dir"
-        fi
+        newname="$base.$ext"
     fi
-done
+
+    count=1
+    while [ -e "$dest_dir/$newname" ]; do
+        if [ -z "$ext" ]; then
+            newname="${base}${count}"
+        else
+            newname="${base}${count}.$ext"
+        fi
+        count=$((count + 1))
+    done
+
+    cp "$src_file" "$dest_dir/$newname"
+}
+
+if [ -z "$max_depth" ]; then
+    find "$input_dir" -type f -print0 |
+    while IFS= read -r -d '' file; do
+        copy_with_rename "$file" "$output_dir"
+    done
+else
+    find "$input_dir" -type d -print0 |
+    while IFS= read -r -d '' dir; do
+        if [ "$dir" = "$input_dir" ]; then
+            continue
+        fi
+
+        rel_path="${dir#$input_dir/}"
+
+        if [ -z "$rel_path" ]; then
+            levels=0
+        else
+            slash_count=$(grep -o "/" <<< "$rel_path" | wc -l)
+            levels=$((slash_count + 1))
+        fi
+
+        if [ "$levels" -ge "$max_depth" ]; then
+            drop=$((levels - max_depth + 1))
+            new_rel_path=$(echo "$rel_path" | cut -d/ -f$((drop+1))-)
+        else
+            new_rel_path="$rel_path"
+        fi
+
+        if [ -n "$new_rel_path" ]; then
+            mkdir -p "$output_dir/$new_rel_path"
+        else
+            mkdir -p "$output_dir"
+        fi
+    done
+
+    find "$input_dir" -type f -print0 |
+    while IFS= read -r -d '' file; do
+        rel_path="${file#$input_dir/}"
+
+        if [[ "$rel_path" == */* ]]; then
+            file_dir="${rel_path%/*}"
+            file_name="${rel_path##*/}"
+        else
+            file_dir=""
+            file_name="$rel_path"
+        fi
+
+        if [ -z "$file_dir" ]; then
+            levels=0
+        else
+            slash_count=$(grep -o "/" <<< "$file_dir" | wc -l)
+            levels=$((slash_count + 1))
+        fi
+
+        if [ "$levels" -ge "$max_depth" ]; then
+            drop=$((levels - max_depth + 1))
+            new_rel_dir=$(echo "$file_dir" | cut -d/ -f$((drop+1))-)
+        else
+            new_rel_dir="$file_dir"
+        fi
+
+        if [ -n "$new_rel_dir" ]; then
+            target_dir="$output_dir/$new_rel_dir"
+        else
+            target_dir="$output_dir"
+        fi
+
+        mkdir -p "$target_dir"
+        copy_with_rename "$file" "$target_dir"
+    done
+fi
 
 echo "Завершено"
