@@ -1,13 +1,23 @@
 #!/bin/bash
+# test00: collect_files.sh: копирует файлы из input_dir в output_dir
+# test01: max_depth исправлен.
+# test02: добавлена отладочная печать
+# test03: Без отладочной печати, но с безопасной обработкой имен
+# test04: для грубины > max_depth
+# test05: для грубины >= max_depth
+# test06: перенесли max_depth в конец аргументов
 
+# Должно быть как минимум два аргумента
 if [ "$#" -lt 2 ]; then
-    echo "Usage: $0 [--max_depth N] input_dir output_dir"
+    echo "Использовать так: $0 input_dir output_dir [--max_depth N]"
     exit 1
 fi
 
-if [ "$1" == "--max_depth" ]; then
-    max_depth="$2"
-    shift 2
+# --max_depth
+if [ "$3" == "--max_depth" ]; then
+    max_depth="$4"
+#    shift 2
+# не двигаем, т.к. max_depth теперь в конце
 else
     max_depth=""
 fi
@@ -133,4 +143,4 @@ else
     done
 fi
 
-echo "Завершено"
+echo "Завершено выполненеи"
